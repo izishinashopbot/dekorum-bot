@@ -1,3 +1,6 @@
-flask
-python-telegram-bot
+aiogram==2.25.1
+Flask==2.3.2
 python-dotenv
+gunicorn
+requests
+liqpaysdk
