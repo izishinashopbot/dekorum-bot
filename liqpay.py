@@ -1,4 +1,3 @@
-# liqpay.py
 import os
 import json
 import base64
