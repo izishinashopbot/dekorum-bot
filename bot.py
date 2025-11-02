@@ -46,7 +46,7 @@ async def on_pay_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💳 Сума до оплати: {PRICE_UAH} грн\n"
         f"Перейдіть за посиланням для оплати:\n{pay_url}\n\n"
         f"Після оплати натисніть «Request to Join» у каналі — бот схвалить автоматично."
-APP = Application.builder().token(BOT_TOKEN).build()
+
 
 APP.add_handler(CommandHandler("start", cmd_start))
 APP.add_handler(CallbackQueryHandler(on_pay_click, pattern="^pay$"))
