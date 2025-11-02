@@ -32,10 +32,7 @@ def _init():
 
 _init()
 
-# ------- API, які використовує bot.py -------
-
 def create_order(user_id: int) -> int:
-    """Створює замовлення і повертає order_id."""
     with closing(_conn()) as c:
         cur = c.cursor()
         cur.execute(
@@ -58,7 +55,6 @@ def set_order_status(order_id: int, status: str) -> None:
         c.commit()
 
 def save_join_request(order_id: int, user_id: int) -> None:
-    """Запам’ятати, що цей користувач чекає доступ після оплати."""
     with closing(_conn()) as c:
         c.execute(
             "INSERT OR REPLACE INTO join_requests(order_id, user_id) VALUES (?, ?)",
@@ -67,7 +63,6 @@ def save_join_request(order_id: int, user_id: int) -> None:
         c.commit()
 
 def pop_join_request(order_id: int) -> int | None:
-    """Повертає user_id і видаляє запис про очікування доступу."""
     with closing(_conn()) as c:
         cur = c.cursor()
         cur.execute("SELECT user_id FROM join_requests WHERE order_id = ?", (order_id,))
