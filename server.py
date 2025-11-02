@@ -24,6 +24,19 @@ if not WEBHOOK_SECRET:
     raise RuntimeError("ENV TELEGRAM_WEBHOOK_SECRET is not set")
 if not APP_URL:
     raise RuntimeError("ENV APP_URL is not set")
+# на початку файлу вже є:
+# import os, asyncio, logging, ... та from bot import APP as tg_app
+
+# ⬇️ ДОДАЙ ЦЕ ПІСЛЯ конфігурації логів/ENV (вище app = Flask(...))
+APP_READY = False
+
+async def ensure_app_ready():
+    """Ініціалізує Application один раз перед першою обробкою апдейту."""
+    global APP_READY
+    if APP_READY:
+        return
+    await tg_app.initialize()   # <-- критично для PTB v20 з вебхуком
+    APP_READY = True
 
 app = Flask(__name__)
 
