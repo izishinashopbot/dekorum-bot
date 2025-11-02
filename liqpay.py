@@ -1,3 +1,4 @@
+# liqpay.py
 import os
 import json
 import base64
@@ -18,9 +19,6 @@ def _sign(data_b64: str) -> str:
     return base64.b64encode(sha1).decode("ascii")
 
 def build_checkout_payload(user_id: int, order_id: int, server_url: str, result_url: str) -> dict:
-    """
-    Повертає dict з полями 'data' і 'signature' для форми POST на https://www.liqpay.ua/api/3/checkout
-    """
     payload = {
         "public_key": PUBLIC_KEY,
         "version": 3,
@@ -29,15 +27,13 @@ def build_checkout_payload(user_id: int, order_id: int, server_url: str, result_
         "currency": "UAH",
         "description": f"Dekorum: доступ до каналу для user {user_id}",
         "order_id": str(order_id),
-        "server_url": server_url,   # бекенд-колбек (наш /liqpay/callback)
-        "result_url": result_url,   # куди повертаємо користувача після оплати
-        # Режим пісочниці можна вмикати на час перевірки:
-        # "sandbox": 1,
+        "server_url": server_url,
+        "result_url": result_url,
+        # "sandbox": 1,  # розкоментуй для тестових платежів
     }
     data_b64 = _b64(json.dumps(payload, ensure_ascii=False))
     signature = _sign(data_b64)
     return {"data": data_b64, "signature": signature}
 
 def verify_callback(data_b64: str, signature: str) -> bool:
-    """Перевірка, що підпис від LiqPay правильний."""
     return _sign(data_b64) == signature
