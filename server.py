@@ -2,50 +2,50 @@
 import os
 import asyncio
 import logging
+import base64
+import json
+
 from dotenv import load_dotenv
 from flask import Flask, request, abort, render_template_string
 from telegram import Update
 from telegram.error import Forbidden
 
+from bot import APP as tg_app                  # Application з bot.py
 from db import get_order, set_order_status, pop_join_request, create_order
-from bot import APP as tg_app
 from liqpay import build_checkout_payload, verify_callback
 
+# ── базові налаштування ─────────────────────────────────────────────
 load_dotenv()
-
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("server")
 
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET")
-APP_URL = os.getenv("APP_URL", "").rstrip("/")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
+APP_URL       = os.getenv("APP_URL", "").rstrip("/")
+CHANNEL_ID    = int(os.getenv("CHANNEL_ID", "0"))
 
 if not WEBHOOK_SECRET:
     raise RuntimeError("ENV TELEGRAM_WEBHOOK_SECRET is not set")
 if not APP_URL:
     raise RuntimeError("ENV APP_URL is not set")
-# на початку файлу вже є:
-# import os, asyncio, logging, ... та from bot import APP as tg_app
 
-# ⬇️ ДОДАЙ ЦЕ ПІСЛЯ конфігурації логів/ENV (вище app = Flask(...))
+# (a) ── додано: одноразова ініціалізація Application перед першою обробкою
 APP_READY = False
-
 async def ensure_app_ready():
-    """Ініціалізує Application один раз перед першою обробкою апдейту."""
+    """Ініціалізує PTB Application рівно один раз (для режиму вебхука)."""
     global APP_READY
     if APP_READY:
         return
-    await tg_app.initialize()   # <-- критично для PTB v20 з вебхуком
+    await tg_app.initialize()       # критично для python-telegram-bot v20+
     APP_READY = True
 
 app = Flask(__name__)
 
-# -------- healthcheck --------
+# ── healthcheck ─────────────────────────────────────────────────────
 @app.get("/")
 def index():
     return "OK", 200
 
-# -------- Telegram webhook --------
+# ── Telegram webhook ────────────────────────────────────────────────
 @app.post(f"/tg/{WEBHOOK_SECRET}")
 def tg_webhook():
     data = request.get_json(force=True, silent=True)
@@ -58,7 +58,7 @@ def tg_webhook():
         log.exception("Failed to parse Update: %s", e)
         abort(400)
 
-    # ensure loop exists
+    # гарантуємо наявність event loop у worker
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
@@ -67,8 +67,16 @@ def tg_webhook():
 
     async def _process():
         try:
+            # (b) ── додано: гарантуємо ініціалізацію Application
+            await ensure_app_ready()
+
+            # необов'язково: корисний лог для діагностики
+            log.info("Processing update: msg=%s cq=%s",
+                     bool(update.message), bool(update.callback_query))
+
             await tg_app.process_update(update)
         except Forbidden:
+            # користувач міг заблокувати бота — не критично
             pass
         except Exception as e:
             log.exception("Update handling failed: %s", e)
@@ -76,7 +84,7 @@ def tg_webhook():
     loop.create_task(_process())
     return "OK", 200
 
-# -------- сторінка оплати --------
+# ── сторінка оплати (автосабміт форми) ─────────────────────────────
 PAY_HTML = """
 <!doctype html><html><head><meta charset="utf-8"><title>Оплата</title></head>
 <body>
@@ -91,9 +99,9 @@ PAY_HTML = """
 
 @app.get("/pay/<int:order_id>")
 def pay(order_id: int):
-    # (на випадок прямого переходу) — створимо ордер, якщо нема
     if not get_order(order_id):
-        order_id = create_order(user_id=0)  # "невідомий", потім повʼяжеться колбеком
+        # якщо зайшли напряму — створимо "технічне" замовлення
+        order_id = create_order(user_id=0)
     payload = build_checkout_payload(
         user_id=0,
         order_id=order_id,
@@ -102,33 +110,32 @@ def pay(order_id: int):
     )
     return render_template_string(PAY_HTML, **payload)
 
-# -------- колбек від LiqPay --------
+# ── серверний колбек від LiqPay ────────────────────────────────────
 @app.post("/liqpay/callback")
 def liqpay_callback():
-    data_b64 = request.form.get("data", "")
+    data_b64  = request.form.get("data", "")
     signature = request.form.get("signature", "")
     if not data_b64 or not signature or not verify_callback(data_b64, signature):
         abort(400)
 
-    import base64, json
-    payload = json.loads(base64.b64decode(data_b64).decode("utf-8"))
-    order_id = int(payload.get("order_id", "0"))
-    status = payload.get("status", "")
+    payload  = json.loads(base64.b64decode(data_b64).decode("utf-8"))
+    order_id = int(payload.get("order_id", "0") or 0)
+    status   = payload.get("status", "")
 
     log.info("LiqPay callback: order=%s status=%s", order_id, status)
 
-    # приймаємо success / sandbox_success / subscribed / hold_approved
     if status in {"success", "sandbox", "sandbox_success", "subscribed", "hold_approved"}:
         set_order_status(order_id, "paid")
 
-        # автоапрув запиту на вступ у канал
         user_id = pop_join_request(order_id)
         if user_id and CHANNEL_ID:
             async def _approve():
                 try:
+                    await ensure_app_ready()
                     await tg_app.bot.approve_chat_join_request(CHANNEL_ID, user_id)
                 except Exception as e:
                     log.exception("approve_chat_join_request failed: %s", e)
+
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
@@ -138,12 +145,15 @@ def liqpay_callback():
 
     return "OK", 200
 
-# -------- сторінка після оплати --------
+# ── сторінка після оплати ──────────────────────────────────────────
 @app.get("/paid/<int:order_id>")
 def paid(order_id: int):
-    return f"Оплата прийнята (замовлення #{order_id}). Якщо ви подали запрос на вступ — він буде схвалений автоматично.", 200
+    return (
+        f"Оплата прийнята (замовлення #{order_id}). "
+        f"Подайте Request to Join у каналі — бот схвалить автоматично.",
+        200,
+    )
 
-
+# локальний запуск (на Render керує gunicorn)
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
