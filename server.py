@@ -10,11 +10,11 @@ from flask import Flask, request, abort, render_template_string
 from telegram import Update
 from telegram.error import Forbidden
 
-from bot import APP as tg_app                  # Application з bot.py
+from bot import APP as tg_app
 from db import get_order, set_order_status, pop_join_request, create_order
 from liqpay import build_checkout_payload, verify_callback
 
-# ── базові налаштування ─────────────────────────────────────────────
+# ── базові налаштування
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("server")
@@ -28,37 +28,35 @@ if not WEBHOOK_SECRET:
 if not APP_URL:
     raise RuntimeError("ENV APP_URL is not set")
 
-# (a) ── додано: одноразова ініціалізація Application перед першою обробкою
+# (a) одноразова ініціалізація PTB Application
 APP_READY = False
 async def ensure_app_ready():
-    """Ініціалізує PTB Application рівно один раз (для режиму вебхука)."""
     global APP_READY
     if APP_READY:
         return
-    await tg_app.initialize()       # критично для python-telegram-bot v20+
+    await tg_app.initialize()  # критично для PTB v20 у режимі вебхука
     APP_READY = True
 
 app = Flask(__name__)
 
-# ── healthcheck ─────────────────────────────────────────────────────
+# ── healthcheck
 @app.get("/")
 def index():
     return "OK", 200
 
-# ── Telegram webhook ────────────────────────────────────────────────
+# ── Telegram webhook
 @app.post(f"/tg/{WEBHOOK_SECRET}")
 def tg_webhook():
     data = request.get_json(force=True, silent=True)
     if not data:
         abort(400)
-
     try:
         update = Update.de_json(data, tg_app.bot)
     except Exception as e:
         log.exception("Failed to parse Update: %s", e)
         abort(400)
 
-    # гарантуємо наявність event loop у worker
+    # event loop для тасок
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
@@ -67,16 +65,15 @@ def tg_webhook():
 
     async def _process():
         try:
-            # (b) ── додано: гарантуємо ініціалізацію Application
+            # (b) гарантуємо ініціалізацію
             await ensure_app_ready()
-
-            # необов'язково: корисний лог для діагностики
-            log.info("Processing update: msg=%s cq=%s",
-                     bool(update.message), bool(update.callback_query))
-
+            log.info(
+                "Processing update: msg=%s cq=%s",
+                bool(update.message),
+                bool(update.callback_query),
+            )
             await tg_app.process_update(update)
         except Forbidden:
-            # користувач міг заблокувати бота — не критично
             pass
         except Exception as e:
             log.exception("Update handling failed: %s", e)
@@ -84,9 +81,9 @@ def tg_webhook():
     loop.create_task(_process())
     return "OK", 200
 
-# ── сторінка оплати (автосабміт форми) ─────────────────────────────
-PAY_HTML = """
-<!doctype html><html><head><meta charset="utf-8"><title>Оплата</title></head>
+# ── сторінка оплати (автосабміт)
+PAY_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Оплата</title></head>
 <body>
 <form id="f" method="POST" action="https://www.liqpay.ua/api/3/checkout">
   <input type="hidden" name="data" value="{{ data }}">
@@ -100,7 +97,6 @@ PAY_HTML = """
 @app.get("/pay/<int:order_id>")
 def pay(order_id: int):
     if not get_order(order_id):
-        # якщо зайшли напряму — створимо "технічне" замовлення
         order_id = create_order(user_id=0)
     payload = build_checkout_payload(
         user_id=0,
@@ -110,7 +106,7 @@ def pay(order_id: int):
     )
     return render_template_string(PAY_HTML, **payload)
 
-# ── серверний колбек від LiqPay ────────────────────────────────────
+# ── колбек від LiqPay
 @app.post("/liqpay/callback")
 def liqpay_callback():
     data_b64  = request.form.get("data", "")
@@ -126,7 +122,6 @@ def liqpay_callback():
 
     if status in {"success", "sandbox", "sandbox_success", "subscribed", "hold_approved"}:
         set_order_status(order_id, "paid")
-
         user_id = pop_join_request(order_id)
         if user_id and CHANNEL_ID:
             async def _approve():
@@ -145,7 +140,7 @@ def liqpay_callback():
 
     return "OK", 200
 
-# ── сторінка після оплати ──────────────────────────────────────────
+# ── сторінка після оплати
 @app.get("/paid/<int:order_id>")
 def paid(order_id: int):
     return (
@@ -154,6 +149,5 @@ def paid(order_id: int):
         200,
     )
 
-# локальний запуск (на Render керує gunicorn)
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
