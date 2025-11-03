@@ -29,16 +29,12 @@ if not APP_URL:
     raise RuntimeError("ENV APP_URL is not set")
 
 # (a) одноразова ініціалізація PTB Application
-APP_READY = False
-async def _process():
-    try:
-        await ensure_app_ready()
-        log.info("App initialized OK")
-        log.info(
-            "Processing update: msg=%s cq=%s",
-            bool(update.message),
-            bool(update.callback_query),
-        )
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Відправляє привітання та кнопку LiqPay-оплати."""
+    keyboard = [
+        [InlineKeyboardButton("💳 Сплатити 1 грн", callback_data="buy")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard )
         await tg_app.process_update(update)
     except Forbidden:
         pass
