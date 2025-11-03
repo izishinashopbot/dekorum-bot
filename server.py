@@ -30,12 +30,20 @@ if not APP_URL:
 
 # (a) одноразова ініціалізація PTB Application
 APP_READY = False
-async def ensure_app_ready():
-    global APP_READY
-    if APP_READY:
-        return
-    await tg_app.initialize()  # критично для PTB v20 у режимі вебхука
-    APP_READY = True
+async def _process():
+    try:
+        await ensure_app_ready()
+        log.info("App initialized OK")
+        log.info(
+            "Processing update: msg=%s cq=%s",
+            bool(update.message),
+            bool(update.callback_query),
+        )
+        await tg_app.process_update(update)
+    except Forbidden:
+        pass
+    except Exception as e:
+        log.exception("Update handling failed: %s", e)
 
 app = Flask(__name__)
 
