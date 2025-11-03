@@ -66,12 +66,12 @@ def tg_webhook():
     async def _process():
         try:
             # (b) гарантуємо ініціалізацію
-            await ensure_app_ready()
-            log.info(
-                "Processing update: msg=%s cq=%s",
-                bool(update.message),
-                bool(update.callback_query),
-            )
+           await ensure_app_ready()
+log.info("App initialized OK")
+log.info("Processing update: msg=%s cq=%s",
+         bool(update.message), bool(update.callback_query))
+
+            
             await tg_app.process_update(update)
         except Forbidden:
             pass
