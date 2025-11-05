@@ -1,52 +1,67 @@
-# bot.py
 import os
-import logging
-from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from db import create_order, save_join_request
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram.ext import ContextTypes
 
-load_dotenv()
+# Унікальний payload для платежу (використовується для перевірки)
+PAYLOAD = "LiqPayTestInvoice"
 
-logging.basicConfig(level=logging.INFO)
-logging.getLogger("telegram").setLevel(logging.INFO)
-logging.getLogger("telegram.ext").setLevel(logging.INFO)
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-PRICE_UAH = int(os.getenv("PRICE_UAH", "490"))
-APP_URL   = os.getenv("APP_URL", "").rstrip("/")
-
-if not BOT_TOKEN:
-    raise RuntimeError("ENV BOT_TOKEN is not set")
-
-APP = Application.builder().token(BOT_TOKEN).build()
-
-# /start
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("💳 Оплатити", callback_data="pay")]]
+# Обробник команди /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Відправляє привітання та кнопку LiqPay-оплати."""
+    keyboard = [
+        [InlineKeyboardButton("💳 Сплатити 1 грн", callback_data="buy")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    # Надсилаємо повідомлення з кнопкою оплати
     await update.message.reply_text(
-        f"Привіт! Доступ до каналу — {PRICE_UAH} грн.\n"
-        f"1) Натисни «Оплатити»\n"
-        f"2) Після оплати подай запит на вступ у канал (Request to Join)\n"
-        f"3) Бот схвалить запит автоматично ✅",
-        reply_markup=InlineKeyboardMarkup(kb)
+        "Привіт! Натисни кнопку нижче, щоб здійснити платіж через LiqPay.",
+        reply_markup=reply_markup
     )
 
-# натискання «Оплатити»
-async def on_pay_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+# Обробник callback від натискання кнопки "сплатити"
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Надсилає інвойс (рахунок) для оплати при натисканні кнопки."""
+    query = update.callback_query
+    await query.answer()  # підтверджуємо callback, щоб прибрати "годинник"
+    chat_id = update.effective_chat.id
 
-    user_id = update.effective_user.id
-    order_id = create_order(user_id=user_id)
-    save_join_request(order_id=order_id, user_id=user_id)
+    # Параметри рахунку (інвойсу)
+    title = "Тестовий платіж"
+    description = "Оплата тестового товару через LiqPay"
+    # Валюта та сума
+    currency = "UAH"
+    price = 1  # 1 гривня
+    prices = [LabeledPrice(label="Тестовий товар", amount=price * 100)]  # 100 копійок = 1 грн
 
-    pay_url = f"{APP_URL}/pay/{order_id}"
-    await q.edit_message_text(
-        f"💳 Сума до оплати: {PRICE_UAH} грн\n"
-        f"Перейдіть за посиланням для оплати:\n{pay_url}\n\n"
-        f"Після оплати натисніть «Request to Join» у каналі — бот схвалить автоматично."
+    # Надсилаємо рахунок на оплату (invoice) користувачу
+    await context.bot.send_invoice(
+        chat_id=chat_id,
+        title=title,
+        description=description,
+        payload=PAYLOAD,
+        provider_token=os.getenv("PAYMENT_PROVIDER_TOKEN"),
+        currency=currency,
+        prices=prices,
+        # Вимкнено запит адреси доставки, телефон тощо для спрощення
+        need_name=False,
+        need_phone_number=False,
+        need_email=False,
+        need_shipping_address=False,
+        is_flexible=False
     )
 
-APP.add_handler(CommandHandler("start", cmd_start))
-APP.add_handler(CallbackQueryHandler(on_pay_click, pattern="^pay$"))
+# Обробник PreCheckoutQuery – фінальний крок перед підтвердженням оплати
+async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Відповідає на запит перед підтвердженням оплати (PreCheckoutQuery)."""
+    query = update.pre_checkout_query
+    if query.invoice_payload != PAYLOAD:
+        # Якщо payload не співпадає з нашим – відхиляємо оплату
+        await query.answer(ok=False, error_message="Щось пішло не так з PAYLOAD...")
+    else:
+        # Підтверджуємо, що все гаразд для завершення оплати
+        await query.answer(ok=True)
+
+# Обробник повідомлення про успішну оплату
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Надсилає повідомлення подяки після успішного платежу."""
+    await update.message.reply_text("Дякуємо за оплату! ✅ Ваш платіж отримано.")
