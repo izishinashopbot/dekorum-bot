@@ -65,3 +65,16 @@ async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Надсилає повідомлення подяки після успішного платежу."""
     await update.message.reply_text("Дякуємо за оплату! ✅ Ваш платіж отримано.")
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, PreCheckoutQueryHandler, MessageHandler, filters
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CallbackQueryHandler(buy, pattern="^buy$"))
+application.add_handler(PreCheckoutQueryHandler(precheckout))
+application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
